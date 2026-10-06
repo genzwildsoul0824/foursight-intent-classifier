@@ -4,6 +4,8 @@ Routes a FourSight chat question to one of seven intents. It uses the previous t
 conversation as context, and flags low-confidence predictions for human review.
 
 - Model: `intfloat/multilingual-e5-base`, fine-tuned with the previous two questions as context
+  ([Hugging Face](https://huggingface.co/henhua21/foursight-intent-e5),
+  [W&B runs](https://wandb.ai/henhua21-tiktok/foursight-intent))
 - Submission: `test_predictions.csv` (plus `test_predictions_review.csv` with confidence and
   `needs_review`)
 - Deterministic: the same input always gives the same label (argmax, no sampling). Two runs
@@ -21,7 +23,17 @@ pip install -r requirements.txt
 
 Put the challenge files `train.csv` and `test.csv` in `data/`.
 
-## Reproduce the submission
+## Predict with the published model
+
+No training needed. This downloads the model and its calibration from Hugging Face and
+writes the same `test_predictions.csv`:
+
+```bash
+cd src
+python predict.py --model henhua21/foursight-intent-e5
+```
+
+## Reproduce the submission from scratch
 
 ```bash
 cd src

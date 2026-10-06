@@ -4,8 +4,8 @@ Loads the fine-tuned model and the calibration (bias, transition prior, temperat
   test_predictions.csv          id,intent (the submission)
   test_predictions_review.csv   id,intent,confidence,needs_review
 
-    python predict.py
-    python predict.py --model <hugging face repo id> --calibration <path to calibration.json>
+    python predict.py                                   # local model from train.py --full
+    python predict.py --model henhua21/foursight-intent-e5   # published model, no training needed
 """
 import argparse
 import json
@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from huggingface_hub import hf_hub_download
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from calibrate import decide
@@ -29,17 +30,25 @@ def predict_logits(model, loader, device):
                       for batch in loader]).numpy()
 
 
+def find_calibration(model):
+    # local model: calibrate.py's output for that run; hub model: the file published with it
+    if Path(model).exists():
+        return ROOT / "outputs" / Path(model).name / "calibration.json"
+    return hf_hub_download(model, "calibration.json")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default=str(ROOT / "models" / "e5-ctx-drop50"))
-    ap.add_argument("--calibration", default=str(ROOT / "outputs" / "e5-ctx-drop50" / "calibration.json"))
+    ap.add_argument("--calibration", default=None, help="defaults to the one that belongs to --model")
     ap.add_argument("--out", default=str(ROOT / "test_predictions.csv"))
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = AutoModelForSequenceClassification.from_pretrained(args.model, dtype=torch.float32).to(device)
-    params = {k: np.array(v) for k, v in json.load(open(args.calibration)).items()}
+    calibration = args.calibration or find_calibration(args.model)
+    params = {k: np.array(v) for k, v in json.load(open(calibration)).items()}
 
     test = load("test")  # sorted by id, with the previous two questions as context
     logits = predict_logits(model, make_loader(tokenizer, test, context=True), device)

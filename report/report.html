@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FourSight intent classification</title>
+<style>
+  @page { size: A4; margin: 13mm 14mm; }
+  body { font-family: "Segoe UI", Arial, sans-serif; font-size: 9.2pt; line-height: 1.32; color: #111; }
+  h1 { font-size: 14pt; margin: 0 0 2px; }
+  h2 { font-size: 10.5pt; margin: 9px 0 3px; border-bottom: 1px solid #bbb; padding-bottom: 1px; }
+  p { margin: 3px 0; }
+  ul { margin: 2px 0 2px 16px; padding: 0; }
+  li { margin: 1px 0; }
+  table { border-collapse: collapse; margin: 4px 0; font-size: 8.4pt; }
+  th, td { border: 1px solid #ccc; padding: 1px 5px; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  th { background: #f0f0f0; }
+  .links { font-size: 8.6pt; margin-bottom: 4px; }
+  .row { display: flex; gap: 12px; align-items: flex-start; }
+  .muted { color: #555; }
+  code { font-size: 8.4pt; }
+</style>
+</head>
+<body>
+
+<h1>FourSight intent classification</h1>
+<div class="links">
+GitHub: https://github.com/genzwildsoul0824/foursight-intent-classifier &nbsp;|&nbsp;
+Hugging Face: https://huggingface.co/henhua21/foursight-intent-e5 &nbsp;|&nbsp;
+W&amp;B: https://wandb.ai/henhua21-tiktok/foursight-intent
+</div>
+
+<h2>1. Approach</h2>
+<p>What I saw in the data shaped the approach:</p>
+<ul>
+  <li><b>Imbalance.</b> realtime 782 rows vs chitchat 17. Macro-F1 is 60% of the score, so the rare classes decide it.</li>
+  <li><b>Multilingual.</b> Questions in seven or more languages.</li>
+  <li><b>Conversation order.</b> Row IDs follow conversation order. Adjacent rows share a label 41% of the time, against 28% by chance, and many rows are follow-ups ("yes", "both", a bare load ID) that only make sense with the turn before.</li>
+  <li><b>Noisy labels.</b> 79 rows share their exact text with a row that has a different label, mostly realtime vs shipment_information.</li>
+</ul>
+<p><b>Model.</b> I fine-tuned <code>intfloat/multilingual-e5-base</code> (an XLM-R model further trained for sentence similarity) with a 7-class head. Its input is the pair (current question, previous two questions).</p>
+<ul>
+  <li><b>Context dropout 0.5.</b> During training, half the time the model sees the question alone, so it still works with no history.</li>
+  <li><b>Class weights.</b> Balanced class weights make it learn the rare classes. This also makes it over-predict them.</li>
+  <li><b>Post-processing</b> (<code>calibration.json</code>) fixes that:
+    <ul>
+      <li>one bias per class;</li>
+      <li>a transition prior on the previous turn's predicted intent;</li>
+      <li>a temperature that makes the confidences calibrated;</li>
+      <li><code>needs_review</code> when the calibrated confidence is below 0.5.</li>
+    </ul>
+  </li>
+</ul>
+<p><b>Why not something else.</b> Routing is closed-set, high-volume classification. An encoder with argmax is fast, runs on CPU, and is deterministic by construction. An LLM would need constrained decoding and still wouldn't know this dataset's labelling conventions.</p>
+<p>I compared four alternatives on the same folds: TF-IDF + LR, frozen e5 + LR, mDeBERTa-v3 and XLM-R. With the same bias correction, fine-tuned e5 was best (68.7 vs 67.8 mDeBERTa vs 64.2 XLM-R, optimistic numbers used only to rank them) and the fastest.</p>
+<p><b>Determinism.</b></p>
+<ul>
+  <li>Fixed seeds and <code>torch.use_deterministic_algorithms</code>. Inference is fp32 argmax.</li>
+  <li>Two prediction runs give byte-identical files. CPU and GPU give the same 566 labels. Predicting from the published Hugging Face model reproduces the submission exactly.</li>
+</ul>
+
+<h2>2. Validation results</h2>
+<p><b>Protocol.</b> 5-fold stratified <i>grouped</i> CV. Groups are blocks of 20 consecutive IDs (sessions), and duplicate questions are pinned to one group: 0 duplicates cross folds, and 90% of neighbouring rows share a fold. A random split would leak duplicates and conversations into validation.</p>
+<p>All post-processing is itself cross-validated (fit on 4 folds, applied to the 5th). Tuning on all out-of-fold predictions would have reported 69.5 instead of the honest 67.7.</p>
+<div class="row">
+<table>
+<tr><th>model (out-of-fold, official score.py)</th><th>OVERALL</th><th>macro-F1</th><th>acc</th><th>fragment acc*</th></tr>
+<tr><td>TF-IDF + logistic regression</td><td>56.5</td><td>48.9</td><td>67.9</td><td>60.5</td></tr>
+<tr><td>frozen e5 embeddings + LR</td><td>63.6</td><td>60.7</td><td>68.1</td><td>54.7</td></tr>
+<tr><td>fine-tuned e5, no context, raw argmax</td><td>57.7</td><td>51.6</td><td>67.0</td><td>58.3</td></tr>
+<tr><td>&nbsp; + bias + temperature</td><td>66.6</td><td>&ndash;</td><td>72.7</td><td>67.6</td></tr>
+<tr><td>fine-tuned e5 + context, + bias + temperature</td><td>66.9</td><td>63.1</td><td>72.7</td><td>61.8</td></tr>
+<tr><td><b>&nbsp; + transition prior (final)</b></td><td><b>67.7</b></td><td><b>63.8</b></td><td><b>73.5</b></td><td><b>66.0</b></td></tr>
+</table>
+<table>
+<tr><th>class</th><th>P</th><th>R</th><th>F1</th><th>n</th></tr>
+<tr><td>shipment_information</td><td>44.6</td><td>30.5</td><td>36.2</td><td>256</td></tr>
+<tr><td>realtime_query</td><td>74.1</td><td>83.5</td><td>78.5</td><td>782</td></tr>
+<tr><td>analytics</td><td>68.8</td><td>57.6</td><td>62.7</td><td>257</td></tr>
+<tr><td>disruptions</td><td>74.2</td><td>82.1</td><td>78.0</td><td>28</td></tr>
+<tr><td>chitchat</td><td>75.0</td><td>88.2</td><td>81.1</td><td>17</td></tr>
+<tr><td>knowledge_base</td><td>86.7</td><td>93.1</td><td>89.8</td><td>509</td></tr>
+<tr><td>other</td><td>25.7</td><td>16.4</td><td>20.0</td><td>55</td></tr>
+</table>
+</div>
+<p class="muted">*Fragments are rows of 3 words or fewer, or IDs only (309 rows); this is where history should matter most. Calibration: ECE 0.210 raw &rarr; 0.035 final.</p>
+<div class="row">
+<table>
+<tr><th>gold \ predicted</th><th>ship</th><th>rt</th><th>anl</th><th>dis</th><th>chat</th><th>kb</th><th>oth</th></tr>
+<tr><td>shipment_information</td><td><b>78</b></td><td>138</td><td>21</td><td>2</td><td>1</td><td>13</td><td>3</td></tr>
+<tr><td>realtime_query</td><td>72</td><td><b>653</b></td><td>33</td><td>3</td><td>1</td><td>12</td><td>8</td></tr>
+<tr><td>analytics</td><td>15</td><td>62</td><td><b>148</b></td><td>2</td><td>0</td><td>25</td><td>5</td></tr>
+<tr><td>disruptions</td><td>3</td><td>2</td><td>0</td><td><b>23</b></td><td>0</td><td>0</td><td>0</td></tr>
+<tr><td>chitchat</td><td>0</td><td>0</td><td>0</td><td>0</td><td><b>15</b></td><td>2</td><td>0</td></tr>
+<tr><td>knowledge_base</td><td>2</td><td>13</td><td>8</td><td>1</td><td>1</td><td><b>474</b></td><td>10</td></tr>
+<tr><td>other</td><td>5</td><td>13</td><td>5</td><td>0</td><td>2</td><td>21</td><td><b>9</b></td></tr>
+</table>
+<table>
+<tr><th>needs_review threshold</th><th>flagged</th><th>precision</th><th>recall</th><th>acc. on rest</th></tr>
+<tr><td>conf &lt; 0.4</td><td>4.9%</td><td>61.7%</td><td>11.5%</td><td>75.4%</td></tr>
+<tr><td><b>conf &lt; 0.5 (default)</b></td><td><b>13.0%</b></td><td><b>59.5%</b></td><td><b>29.2%</b></td><td><b>78.5%</b></td></tr>
+<tr><td>conf &lt; 0.6</td><td>21.7%</td><td>56.2%</td><td>46.0%</td><td>81.8%</td></tr>
+<tr><td>conf &lt; 0.7</td><td>32.6%</td><td>50.9%</td><td>62.7%</td><td>85.3%</td></tr>
+</table>
+</div>
+<p class="muted">Precision = share of flagged questions that are wrong (base error rate 26.5%). Recall = share of all errors that get flagged. The right threshold depends on review capacity. On the test set, 13.3% are flagged.</p>
+<p><b>Where it fails.</b></p>
+<ul>
+  <li><b>shipment_information vs realtime_query</b> (138 + 72 errors). Part of this is the labels: 17 duplicated texts, including bare load IDs, carry both labels, so at least 37 rows are wrong for any model that reads only the question. The rest is real overlap between "where is it" and "what is its status".</li>
+  <li><b>analytics &rarr; realtime</b> (62). These are questions about many loads that are phrased like a single-load lookup.</li>
+  <li><b>other</b> (F1 20). A 55-example catch-all with no common theme, often confused with knowledge_base.</li>
+  <li><b>The rare classes now work</b> (chitchat 81, disruptions 78), but they rest on 17 and 28 examples, so these numbers have wide uncertainty. Fold-to-fold spread is about &plusmn;3 OVERALL.</li>
+</ul>
+
+<h2>3. Conversational history</h2>
+<p><b>Built and measured.</b> Two mechanisms, both validated on sessions recovered from ID order.</p>
+<ul>
+  <li><b>(a) Context in the encoder.</b> The previous two questions go in as the second text of a pair. The question comes first, so truncation never cuts it.
+    <ul>
+      <li>With a linear model, adding context hurt; it only helped when gated to fragments. The fine-tuned encoder attends across both texts and learns when context matters. It helps full questions too, because labels are session-level.</li>
+      <li>Context dropout keeps it usable without history: 58.0 raw OVERALL with no context, where a model trained always with context collapses to 53.3.</li>
+    </ul>
+  </li>
+  <li><b>(b) Transition prior.</b> P(current intent | previous <i>predicted</i> intent) from a 7&times;7 table counted on training turns, added to the logits with strength &alpha; = 0.25 (chosen inside CV). It is cheap, deterministic and auditable. Together with (a) it lifts fragment accuracy from 61.8 to 66.0 and OVERALL by +1.1 over the no-context model.</li>
+</ul>
+<p><b>Production design.</b></p>
+<ul>
+  <li><b>Session state.</b> Keep per session: the last K turns (user questions <i>and</i> bot answers), the last routed intent, and extracted entities (load/PO IDs, date ranges, filters such as lane or carrier).
+    <ul>
+      <li>Context is taken only from the same session ID. Here, the missing session boundaries are the main source of context errors, e.g. a "hi" that opens a chat gets someone else's history.</li>
+      <li>The router gets (question, recent turns) as now, plus the last routed intent through the prior.</li>
+    </ul>
+  </li>
+  <li><b>Follow-ups.</b> "what about last month?" is routed with the previous intent and inherits its entities, with the date range overwritten, so the downstream product receives a complete query.</li>
+  <li><b>Optional rewriter.</b> Later, a small constrained, greedy-decoding rewriter could turn follow-ups into standalone questions for the downstream products.</li>
+  <li><b>Labelling.</b> Label logged conversations per turn, with the conversation visible to annotators, so labels become consistent. Today's session-level noise is the biggest accuracy limit.</li>
+  <li><b>Fallback.</b> If the history service is down, the same model runs on the question alone (graceful degradation, measured above).</li>
+</ul>
+
+<h2>4. A brand-new intent in production</h2>
+<ul>
+  <li><b>Detect.</b> Watch the share of <code>needs_review</code> and "other" predictions, plus an out-of-distribution score: the distance of the question's embedding to the nearest class centroid. A sustained rise means something new is arriving.</li>
+  <li><b>Discover.</b> Cluster the flagged questions weekly (embeddings + HDBSCAN). A reviewer names and defines any coherent new cluster and labels 20&ndash;50 examples.</li>
+  <li><b>Serve meanwhile.</b> Route it to "other" or a human. Optionally add a nearest-neighbour rule on the labelled examples, so the new intent gets routed before retraining.</li>
+  <li><b>Retrain.</b> Add the class to the head, retrain (about 2 minutes here), rerun grouped CV and calibration, and ship only if the old classes don't regress. The closed label set stays versioned with the model and its <code>calibration.json</code>.</li>
+</ul>
+
+<h2>5. Disclosures and limitations</h2>
+<ul>
+  <li><b>Test context.</b> At test time, context comes from the previous <i>test questions</i> (text only, never labels). This assumes the test file is in conversation order, which its adjacent-row similarity supports. Without that order, the model falls back to roughly its no-context quality.</li>
+  <li><b>Overlap with train.</b> 73 test questions appear verbatim in train, so the test score may be higher than the strict CV estimate.</li>
+  <li><b>Uncertainty.</b> One training seed per configuration. Differences under about 2 points between variants are within noise.</li>
+  <li><b>Final model.</b> It is trained on all 1,904 rows with the CV-validated recipe and calibration.</li>
+</ul>
+
+</body>
+</html>
