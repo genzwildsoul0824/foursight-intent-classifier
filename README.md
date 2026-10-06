@@ -1,7 +1,13 @@
 # FourSight intent classifier
 
-Routes a FourSight chat question to one of seven intents. Uses the previous turns of the
-conversation as context. Work in progress.
+Routes a FourSight chat question to one of seven intents. It uses the previous turns of the
+conversation as context, and flags low-confidence predictions for human review.
+
+- Model: `intfloat/multilingual-e5-base`, fine-tuned with the previous two questions as context
+- Submission: `test_predictions.csv` (plus `test_predictions_review.csv` with confidence and
+  `needs_review`)
+- Deterministic: the same input always gives the same label (argmax, no sampling). Two runs
+  give byte-identical files, and CPU and GPU give the same labels.
 
 ## Setup
 
@@ -15,23 +21,32 @@ pip install -r requirements.txt
 
 Put the challenge files `train.csv` and `test.csv` in `data/`.
 
-## Run
+## Reproduce the submission
 
 ```bash
 cd src
-python data.py         # data summary and fold check
-python baselines.py    # TF-IDF and e5 baselines
-python train.py        # fine-tune multilingual-e5 (5 folds, ~7 min on an RTX 4060 Ti)
-python train.py --model microsoft/mdeberta-v3-base   # other backbones
-python train.py --context --name e5-ctx-drop50       # + previous two turns, context dropout 0.5
-python predict.py                                    # bias, transition prior, calibration, needs_review
+python train.py --context --name e5-ctx-drop50          # 5-fold CV, out-of-fold logits (~9 min)
+python calibrate.py                                     # bias, transition prior, temperature (~1 min)
+python train.py --context --name e5-ctx-drop50 --full   # final model on all rows -> models/ (~2 min)
+python predict.py                                       # -> test_predictions.csv
 ```
 
-Training logs to Weights & Biases in offline mode (`wandb/`); run `wandb sync` to upload.
+Inference also runs on CPU. Training logs go to Weights & Biases in offline mode (`wandb/`);
+run `wandb sync` to upload them.
+
+## Experiments
+
+```bash
+python data.py         # data summary and fold check
+python baselines.py    # TF-IDF and e5 baselines
+python train.py        # fine-tuned e5 without context
+python train.py --model microsoft/mdeberta-v3-base   # other backbones
+python train.py --context --context_dropout 0 --name e5-ctx
+```
 
 Scores come from the official `score.py`. Full reports are written to `outputs/<model>/report.txt`.
 
-## Results so far
+## Results
 
 5-fold grouped CV, out-of-fold predictions:
 
@@ -47,9 +62,9 @@ Scores come from the official `score.py`. Full reports are written to `outputs/<
 
 The fine-tuned models are trained with balanced class weights, so before any correction
 they predict the rare classes far too often (chitchat recall 100%, precision 9%).
-`predict.py` fixes this with a per-class bias, adds a transition prior (previous predicted
-intent -> current intent) and calibrates the confidence. All of this is tuned inside the CV,
-so the score below is not optimistic:
+`calibrate.py` fixes this with a per-class bias. It also adds a transition prior (previous
+predicted intent -> current intent) and calibrates the confidence. All of this is tuned inside
+the CV, so the score below is not optimistic:
 
 | final model | OVERALL | macro-F1 | accuracy | fragment accuracy | ECE |
 |---|---|---|---|---|---|

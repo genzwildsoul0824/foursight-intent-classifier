@@ -5,6 +5,7 @@ For every fold we train on the other 4 folds, then save the logits on the held-o
 
     python train.py                                   # current question only
     python train.py --context --name e5-ctx-drop50    # + previous turns, context dropout 0.5
+    python train.py --context --name e5-ctx-drop50 --full   # final model on all rows -> models/
 """
 import argparse
 import gc
@@ -79,21 +80,19 @@ def predict(model, loader):
     return torch.cat(logits).numpy()
 
 
-def train_fold(args, df, test, k):
-    set_seed(args.seed + k)
+def train_model(args, tr, seed, tag, va=None):
+    """Fine-tune on the rows in `tr`. If `va` is given, report validation loss after each epoch."""
+    set_seed(seed)
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     # force fp32 weights: mdeberta's checkpoint is fp16 and trains to NaN otherwise
     model = AutoModelForSequenceClassification.from_pretrained(
-        args.model, num_labels=len(LABELS), dtype=torch.float32).cuda()
+        args.model, num_labels=len(LABELS), dtype=torch.float32,
+        id2label=dict(enumerate(LABELS)), label2id={label: i for i, label in enumerate(LABELS)}).cuda()
     # freeze the 250k-token embedding table (~70% of the weights), saves ~2 GB of GPU memory
     model.base_model.embeddings.word_embeddings.weight.requires_grad = False
 
-    tr = df[df["fold"] != k].reset_index(drop=True)
-    va = df[df["fold"] == k].reset_index(drop=True)
     train_loader = make_loader(tokenizer, tr, args.context, args.context_dropout, labels=True,
-                               shuffle=True, seed=args.seed + k, batch_size=args.batch_size)
-    val_loader = make_loader(tokenizer, va, args.context)
-
+                               shuffle=True, seed=seed, batch_size=args.batch_size)
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(params, lr=args.lr, weight_decay=0.01)
     steps = len(train_loader) * args.epochs
@@ -112,19 +111,15 @@ def train_fold(args, df, test, k):
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
-            wandb.log({f"fold{k}/train_loss": loss.item()})
+            wandb.log({f"{tag}/train_loss": loss.item()})
 
-        val_logits = predict(model, val_loader)
-        val_loss = loss_fn(torch.tensor(val_logits).cuda(), torch.tensor(va["label"].to_numpy()).cuda()).item()
-        val_acc = (val_logits.argmax(1) == va["label"].to_numpy()).mean()
-        wandb.log({f"fold{k}/val_loss": val_loss, f"fold{k}/val_acc": val_acc, f"fold{k}/epoch": epoch + 1})
-        print(f"fold {k} epoch {epoch + 1}: val loss {val_loss:.3f}, val acc {val_acc:.3f}")
-
-    # with context, also predict without it for comparison
-    variants = [True, False] if args.context else [False]
-    val = {c: predict(model, make_loader(tokenizer, va, c)) for c in variants}
-    tst = {c: predict(model, make_loader(tokenizer, test, c)) for c in variants}
-    return val, tst
+        if va is not None:
+            val_logits = predict(model, make_loader(tokenizer, va, args.context))
+            val_loss = loss_fn(torch.tensor(val_logits).cuda(), torch.tensor(va["label"].to_numpy()).cuda()).item()
+            val_acc = (val_logits.argmax(1) == va["label"].to_numpy()).mean()
+            wandb.log({f"{tag}/val_loss": val_loss, f"{tag}/val_acc": val_acc, f"{tag}/epoch": epoch + 1})
+            print(f"{tag} epoch {epoch + 1}: val loss {val_loss:.3f}, val acc {val_acc:.3f}")
+    return tokenizer, model
 
 
 def main():
@@ -137,6 +132,7 @@ def main():
     ap.add_argument("--batch_size", type=int, default=16)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--name", default=None)
+    ap.add_argument("--full", action="store_true", help="train one model on all rows and save it to models/")
     args = ap.parse_args()
     name = args.name or args.model.split("/")[-1]
 
@@ -144,19 +140,31 @@ def main():
     test = load("test")
     out = ROOT / "outputs" / name
     out.mkdir(parents=True, exist_ok=True)
-    wandb.init(project="foursight-intent", name=name, config=vars(args), dir=ROOT)
+    wandb.init(project="foursight-intent", name=f"{name}-full" if args.full else name, config=vars(args), dir=ROOT)
+
+    if args.full:
+        tokenizer, model = train_model(args, df, args.seed, "full")
+        model.save_pretrained(ROOT / "models" / name)
+        tokenizer.save_pretrained(ROOT / "models" / name)
+        print(f"saved to models/{name}")
+        wandb.finish()
+        return
 
     variants = [True, False] if args.context else [False]
     oof = {c: np.zeros((len(df), len(LABELS)), dtype=np.float32) for c in variants}
     test_logits = {c: [] for c in variants}
     for k in range(N_FOLDS):
-        val, tst = train_fold(args, df, test, k)
-        # free the last fold's model before loading the next one (8 GB card)
+        tr = df[df["fold"] != k].reset_index(drop=True)
+        va = df[df["fold"] == k].reset_index(drop=True)
+        tokenizer, model = train_model(args, tr, args.seed + k, f"fold{k}", va)
+        # with context, also predict without it for comparison
+        for c in variants:
+            oof[c][(df["fold"] == k).to_numpy()] = predict(model, make_loader(tokenizer, va, c))
+            test_logits[c].append(predict(model, make_loader(tokenizer, test, c)))
+        # free this fold's model before loading the next one (8 GB card)
+        del model
         gc.collect()
         torch.cuda.empty_cache()
-        for c in variants:
-            oof[c][(df["fold"] == k).to_numpy()] = val[c]
-            test_logits[c].append(tst[c])
 
     for c in variants:
         suffix = "" if c == args.context else "_noctx"
