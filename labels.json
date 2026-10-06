@@ -1,0 +1,30 @@
+{
+ "labels": [
+  "shipment_information",
+  "realtime_query",
+  "analytics",
+  "disruptions",
+  "chitchat",
+  "knowledge_base",
+  "other"
+ ],
+ "definitions": {
+  "shipment_information": "Shipment Visibility. 'Where is my shipment?' \u2014 current location / visibility state of a load.",
+  "realtime_query": "Shipment questions about ETAs, statuses, and reference numbers for specific loads (live lookups).",
+  "analytics": "Aggregated answers from reasoning over historic data (counts, trends, breakdowns).",
+  "disruptions": "Questions about disruptions affecting shipments or the supply chain (weather, ports, borders, capacity).",
+  "chitchat": "Generic conversation with the bot ('hi', 'how are you', 'what can you do').",
+  "knowledge_base": "Questions to understand a product or a feature ('how do I add a user').",
+  "other": "Out of FourKites' scope, or fits none of the classes above."
+ },
+ "train_distribution": {
+  "shipment_information": 256,
+  "realtime_query": 782,
+  "analytics": 257,
+  "disruptions": 28,
+  "chitchat": 17,
+  "knowledge_base": 509,
+  "other": 55
+ },
+ "note": "Closed set of 7 labels. Classes are imbalanced; the scorer weights macro-F1 at 0.6 so rare classes count. Test distribution is withheld."
+}

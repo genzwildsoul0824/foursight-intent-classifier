@@ -1,0 +1,20 @@
+# challenge files, not for redistribution
+intent_classification_challenge.pdf
+PROBLEM_STATEMENT.md
+data/*.csv
+
+# Generated artifacts
+outputs/
+models/
+wandb/
+*.pt
+*.safetensors
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# local notes
+notes/

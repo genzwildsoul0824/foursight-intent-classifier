@@ -1,0 +1,21 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "title": "FourSight intent-classification submission",
+ "description": "CSV with a header row 'id,intent'. One row per test id; intent must be one of the seven labels.",
+ "format": "text/csv",
+ "columns": {
+  "id": "integer id from data/test.csv",
+  "intent": {
+   "enum": [
+    "shipment_information",
+    "realtime_query",
+    "analytics",
+    "disruptions",
+    "chitchat",
+    "knowledge_base",
+    "other"
+   ]
+  }
+ },
+ "example_row": "1,realtime_query"
+}

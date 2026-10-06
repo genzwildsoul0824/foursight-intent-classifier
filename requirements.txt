@@ -1,0 +1,12 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+transformers==5.18.0
+accelerate==1.15.0
+sentencepiece==0.2.2
+protobuf==7.36.2
+sentence-transformers==6.1.0
+scikit-learn==1.9.1
+scipy==1.18.1
+pandas==3.0.6
+numpy==2.5.3
+wandb==0.30.0
