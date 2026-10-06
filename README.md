@@ -19,5 +19,18 @@ Put the challenge files `train.csv` and `test.csv` in `data/`.
 
 ```bash
 cd src
-python data.py    # data summary and fold check
+python data.py         # data summary and fold check
+python baselines.py    # TF-IDF and e5 baselines
 ```
+
+Scores come from the official `score.py`. Full reports are written to `outputs/<model>/report.txt`.
+
+## Results so far
+
+5-fold grouped CV, out-of-fold predictions:
+
+| model | OVERALL | macro-F1 | accuracy | fragment accuracy |
+|---|---|---|---|---|
+| TF-IDF + LR | 56.5 | 48.9 | 67.9 | 60.5 |
+| multilingual-e5 + LR | 63.6 | 60.7 | 68.1 | 54.7 |
+| multilingual-e5 + LR, context on fragments | 64.2 | 61.0 | 69.0 | 60.5 |
