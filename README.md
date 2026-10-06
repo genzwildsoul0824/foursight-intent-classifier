@@ -23,6 +23,7 @@ python data.py         # data summary and fold check
 python baselines.py    # TF-IDF and e5 baselines
 python train.py        # fine-tune multilingual-e5 (5 folds, ~7 min on an RTX 4060 Ti)
 python train.py --model microsoft/mdeberta-v3-base   # other backbones
+python train.py --context --name e5-ctx-drop50       # + previous two turns, context dropout 0.5
 ```
 
 Training logs to Weights & Biases in offline mode (`wandb/`); run `wandb sync` to upload.
@@ -41,6 +42,7 @@ Scores come from the official `score.py`. Full reports are written to `outputs/<
 | fine-tuned mDeBERTa-v3-base | 56.3 | 50.5 | 64.9 | 58.9 |
 | fine-tuned XLM-R-base | 56.9 | 51.2 | 65.5 | 58.3 |
 | fine-tuned multilingual-e5-base | 57.7 | 51.6 | 67.0 | 58.3 |
+| fine-tuned e5 + context (dropout 0.5) | 59.3 | 52.9 | 68.8 | 60.8 |
 
 The fine-tuned models are trained with balanced class weights, so before any threshold
 correction they predict the rare classes far too often (chitchat recall 100%, precision 9%).
