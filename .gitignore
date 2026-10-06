@@ -7,6 +7,7 @@ data/*.csv
 outputs/
 models/
 wandb/
+*.log
 *.pt
 *.safetensors
 
